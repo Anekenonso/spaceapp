@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { formatTraceparent, parseTraceparent } from "@space/contracts";
 import { createOtlpSpanExporter, type ServerSpan } from "@space/runtime";
+import { ContinueAsNew } from "@temporalio/workflow";
 import { createWorkflowTracingSink } from "../src/workflow-tracing-sinks.js";
-import { interceptors } from "../src/workflow-observability.js";
+import {
+  interceptors,
+  createWorkflowObservabilityInterceptors
+} from "../src/workflow-observability.js";
 import { defaultPayloadConverter } from "@temporalio/common";
 import { observeActivityExecution } from "../src/activity-observability.js";
 
@@ -11,7 +15,23 @@ const inboundTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const inboundSpanId = "00f067aa0ba902b7";
 const inboundTraceparent = formatTraceparent(inboundTraceId, inboundSpanId, "01");
 
+const defaultWorkflowInfo = () => ({
+  workflowType: "codexAppServerTurnWorkflow",
+  workflowId: "workflow:codex",
+  runId: "run:1",
+  attempt: 1,
+  memo: {}
+});
+
 describe("Workflow observability interceptors and sinks", () => {
+  it("exports a no-argument interceptors factory returning non-empty inbound and outbound arrays", () => {
+    const factory = interceptors();
+    expect(factory.inbound).toBeDefined();
+    expect(factory.inbound!.length).toBeGreaterThan(0);
+    expect(factory.outbound).toBeDefined();
+    expect(factory.outbound!.length).toBeGreaterThan(0);
+  });
+
   it("creates a workflow span whose parent is the propagated traceparent and attaches traceparent to outbound activities", async () => {
     const recordedSpans: ServerSpan[] = [];
     const mockExporter = {
@@ -21,8 +41,9 @@ describe("Workflow observability interceptors and sinks", () => {
       stats: () => ({ exported: 0, dropped: 0, failed: 0 })
     };
 
-    const interceptorFactory = interceptors({
-      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) }
+    const interceptorFactory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: defaultWorkflowInfo
     })();
     const inbound = interceptorFactory.inbound![0]!;
     const outbound = interceptorFactory.outbound![0]!;
@@ -78,6 +99,110 @@ describe("Workflow observability interceptors and sinks", () => {
     expect(wfSpan.attributes["space.room_id"]).toBe("room:alpha");
   });
 
+  it("derives traceId and spanId deterministically from workflowInfo without PRNG when no inbound traceparent", async () => {
+    const recordedSpans: ServerSpan[] = [];
+    const mockExporter = {
+      record: (span: ServerSpan) => recordedSpans.push(span),
+      flush: async () => {},
+      close: async () => {},
+      stats: () => ({ exported: 0, dropped: 0, failed: 0 })
+    };
+
+    const interceptorFactory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: () => ({
+        workflowType: "customWorkflow",
+        workflowId: "workflow:fixed-id",
+        runId: "run:fixed-run",
+        attempt: 2,
+        memo: {}
+      })
+    })();
+    const inbound = interceptorFactory.inbound![0]!;
+
+    await inbound.execute!({ args: [], headers: {} }, async () => "ok");
+
+    expect(recordedSpans).toHaveLength(1);
+    const span = recordedSpans[0]!;
+    expect(span.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(span.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(span.parentSpanId).toBeNull();
+
+    // Running again with identical workflowInfo produces identical deterministic IDs
+    const recordedSpans2: ServerSpan[] = [];
+    const factory2 = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (s) => recordedSpans2.push(s) },
+      getWorkflowInfo: () => ({
+        workflowType: "customWorkflow",
+        workflowId: "workflow:fixed-id",
+        runId: "run:fixed-run",
+        attempt: 2,
+        memo: {}
+      })
+    })();
+    await factory2.inbound![0]!.execute!({ args: [], headers: {} }, async () => "ok");
+    expect(recordedSpans2[0]!.traceId).toBe(span.traceId);
+    expect(recordedSpans2[0]!.spanId).toBe(span.spanId);
+
+    // Preserves valid 32-char hex memoTraceId
+    const memoTraceId = "0123456789abcdef0123456789abcdef";
+    const recordedSpans3: ServerSpan[] = [];
+    const factory3 = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (s) => recordedSpans3.push(s) },
+      getWorkflowInfo: () => ({
+        workflowType: "customWorkflow",
+        workflowId: "workflow:fixed-id",
+        runId: "run:fixed-run",
+        attempt: 1,
+        memo: { w3cTraceId: memoTraceId }
+      })
+    })();
+    await factory3.inbound![0]!.execute!({ args: [], headers: {} }, async () => "ok");
+    expect(recordedSpans3[0]!.traceId).toBe(memoTraceId);
+  });
+
+  it("does not mark ContinueAsNew errors as failure on workflow spans", async () => {
+    const recordedSpans: ServerSpan[] = [];
+    const mockExporter = {
+      record: (span: ServerSpan) => recordedSpans.push(span),
+      flush: async () => {},
+      close: async () => {},
+      stats: () => ({ exported: 0, dropped: 0, failed: 0 })
+    };
+
+    const factory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: defaultWorkflowInfo
+    })();
+    const inbound = factory.inbound![0]!;
+
+    await expect(
+      inbound.execute!({ args: [], headers: {} }, async () => {
+        throw new ContinueAsNew({});
+      })
+    ).rejects.toThrow();
+
+    expect(recordedSpans).toHaveLength(1);
+    expect(recordedSpans[0]!.error).toBe(false);
+    expect(recordedSpans[0]!.attributes["space.status"]).toBe("COMPLETED");
+
+    // Standard application error is marked as failure
+    const errorSpans: ServerSpan[] = [];
+    const errorFactory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => errorSpans.push(span) },
+      getWorkflowInfo: defaultWorkflowInfo
+    })();
+    await expect(
+      errorFactory.inbound![0]!.execute!({ args: [], headers: {} }, async () => {
+        throw new Error("unhandled workflow error");
+      })
+    ).rejects.toThrow("unhandled workflow error");
+
+    expect(errorSpans).toHaveLength(1);
+    expect(errorSpans[0]!.error).toBe(true);
+    expect(errorSpans[0]!.attributes["space.status"]).toBe("FAILED");
+  });
+
   it("nests child workflows under parent workflow span", async () => {
     const recordedSpans: ServerSpan[] = [];
     const mockExporter = {
@@ -87,8 +212,9 @@ describe("Workflow observability interceptors and sinks", () => {
       stats: () => ({ exported: 0, dropped: 0, failed: 0 })
     };
 
-    const parentFactory = interceptors({
-      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) }
+    const parentFactory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: defaultWorkflowInfo
     })();
     const parentInbound = parentFactory.inbound![0]!;
     const parentOutbound = parentFactory.outbound![0]!;
@@ -129,7 +255,7 @@ describe("Workflow observability interceptors and sinks", () => {
     expect(parsedChildParent!.parentId).toBe(parentWfSpan.spanId);
 
     // Simulate child workflow execution with childHeaders
-    const childFactory = interceptors({
+    const childFactory = createWorkflowObservabilityInterceptors({
       sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
       getWorkflowInfo: () => ({
         workflowType: "memoryConsolidationWorkflow",
@@ -164,8 +290,9 @@ describe("Workflow observability interceptors and sinks", () => {
       stats: () => ({ exported: 0, dropped: 0, failed: 0 })
     };
 
-    const run1Factory = interceptors({
-      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) }
+    const run1Factory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: defaultWorkflowInfo
     })();
     const run1Inbound = run1Factory.inbound![0]!;
     const run1Outbound = run1Factory.outbound![0]!;
@@ -187,7 +314,7 @@ describe("Workflow observability interceptors and sinks", () => {
             },
             async (nextInput) => {
               nextRunHeaders = nextInput.headers;
-              throw new Error("CONTINUE_AS_NEW");
+              throw new ContinueAsNew({});
             }
           );
         }
@@ -199,8 +326,15 @@ describe("Workflow observability interceptors and sinks", () => {
     expect(nextRunHeaders["x-space-continue-from"]).toBeDefined();
 
     // Run 2 starts with nextRunHeaders
-    const run2Factory = interceptors({
-      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) }
+    const run2Factory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: () => ({
+        workflowType: "codexAppServerTurnWorkflow",
+        workflowId: "workflow:codex",
+        runId: "run:2",
+        attempt: 1,
+        memo: {}
+      })
     })();
     const run2Inbound = run2Factory.inbound![0]!;
     await run2Inbound.execute!(
@@ -229,8 +363,9 @@ describe("Workflow observability interceptors and sinks", () => {
       stats: () => ({ exported: 0, dropped: 0, failed: 0 })
     };
 
-    const factory = interceptors({
-      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) }
+    const factory = createWorkflowObservabilityInterceptors({
+      sink: { recordWorkflowSpan: (span) => mockExporter.record(span) },
+      getWorkflowInfo: defaultWorkflowInfo
     })();
     const inbound = factory.inbound![0]!;
 
@@ -315,10 +450,11 @@ describe("End-to-end trace tree integration with fake OTLP collector", () => {
       // Wire sinks
       const sinks = createWorkflowTracingSink(exporter);
 
-      const interceptorFactory = interceptors({
+      const interceptorFactory = createWorkflowObservabilityInterceptors({
         sink: {
           recordWorkflowSpan: (span) => sinks.observability.recordWorkflowSpan.fn({} as any, span)
-        }
+        },
+        getWorkflowInfo: defaultWorkflowInfo
       })();
       const wfInbound = interceptorFactory.inbound![0]!;
       const wfOutbound = interceptorFactory.outbound![0]!;

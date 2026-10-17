@@ -168,7 +168,14 @@ export function createOtlpSpanExporter(options: OtlpSpanExporterOptions): SpanEx
       }
       queue.push({
         ...span,
-        attributes: sanitizeSpanAttributes(span.attributes)
+        attributes: sanitizeSpanAttributes(span.attributes),
+        ...(span.links ? {
+          links: span.links.map(link => ({
+            traceId: link.traceId,
+            spanId: link.spanId,
+            ...(link.attributes ? { attributes: sanitizeSpanAttributes(link.attributes) } : {})
+          }))
+        } : {})
       });
       if (queue.length >= batchSize) void flush();
     },

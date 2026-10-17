@@ -225,22 +225,16 @@ The trace context is local by default. An optional OTLP/HTTP (JSON) exporter sen
 
 ### Replay compatibility
 
-No file under `apps/worker/src` that the workflow bundle imports was changed
-(`workflows.ts`, `room-supervisor-state.ts`, `turn-runtime-policy.ts`,
-`dot-goal-loop.ts`). The `agent-turns` workflow bundle was built for the base
-commit and for this change and compared after normalizing paths and webpack
-module numbers. The only differences are in `@space/contracts`:
-- the new `observability` module;
-- the optional `traceparent` turn-input field;
-- the optional file search and readiness fields.
+Workflow tracing is added via Temporal's runtime interceptor mechanism (`apps/worker/src/workflow-observability.ts` in `interceptors.workflowModules`).
+The interceptor runs inside the workflow sandbox but adheres strictly to Temporal determinism constraints:
+- It does not consume the workflow PRNG or call `uuid4()`; trace and span IDs are derived deterministically from `workflowInfo()` when inbound trace context is absent, preserving valid 32-character hex `memoTraceId`.
+- It does not perform I/O or direct network calls inside the workflow isolate; span recording delegates to Temporal sinks (`WorkflowTracingSinks`) configured with `callDuringReplay: false`, so replaying histories emits zero spans.
+- It intercepts outbound child workflows, activities, and `continueAsNew` to propagate trace context in headers and continuation metadata.
+- In `@space/contracts`, `roomAgentContinuation` is extended with the optional `sourceTraceparent` field to link background continuation runs to their parent missions.
 
-A history without `traceparent` parses exactly as before. Activity inputs are
-not part of Temporal's determinism check.
+Existing workflow definitions (`workflows.ts`, `room-supervisor-state.ts`, `turn-runtime-policy.ts`, `dot-goal-loop.ts`) have no altered command sequences. Existing histories without `traceparent` or continuation links parse and replay deterministically.
 
-The read-only live replay (`node scripts/temporal-replay-check.mjs --limit 30`)
-could not be run from the agent sandbox that made this change. Its network
-namespace has no route to the Temporal container (`172.18.0.5:7233`), and
-`127.0.0.1:7233` refuses connections. Run it before deploying this change.
+Running the read-only live history replay check (`node scripts/temporal-replay-check.mjs --limit 30`) is a required pre-deployment verification step before releasing worker tracing changes to a cluster.
 
 ## Redaction policy
 

@@ -1,7 +1,7 @@
 import {
   proxySinks,
-  uuid4,
   workflowInfo,
+  ContinueAsNew,
   type Next,
   type WorkflowExecuteInput,
   type WorkflowInboundCallsInterceptor,
@@ -171,26 +171,34 @@ function extractContinuationLinks(input: WorkflowExecuteInput): SpanLink[] {
   return links;
 }
 
+function fnv1a32(str: string, seed: number): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+function deterministicHex(input: string, length: 16 | 32): string {
+  const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  const parts: string[] = [];
+  const count = length === 32 ? 4 : 2;
+  for (let i = 0; i < count; i++) {
+    const seed = seeds[i] ?? 0x811c9dc5;
+    let val = fnv1a32(`${input}#${i}`, seed);
+    if (val === 0) val = 1 + i;
+    parts.push(val.toString(16).padStart(8, "0"));
+  }
+  const result = parts.join("");
+  return /^0+$/.test(result) ? result.slice(0, -1) + "1" : result;
+}
+
 class TracingWorkflowInboundInterceptor implements WorkflowInboundCallsInterceptor {
   constructor(private readonly state: TracingState, private readonly options?: WorkflowObservabilityOptions) {}
 
   async execute(input: WorkflowExecuteInput, next: Next<WorkflowInboundCallsInterceptor, "execute">): Promise<unknown> {
-    let info: any;
-    if (this.options?.getWorkflowInfo) {
-      info = this.options.getWorkflowInfo();
-    } else {
-      try {
-        info = workflowInfo();
-      } catch {
-        info = {
-          workflowType: "codexAppServerTurnWorkflow",
-          workflowId: "workflow:codex",
-          runId: "run:1",
-          attempt: 1,
-          memo: {}
-        };
-      }
-    }
+    const info = this.options?.getWorkflowInfo ? this.options.getWorkflowInfo() : workflowInfo();
 
     const inbound = extractInboundTraceparent(input, info.memo);
     const parsed = parseTraceparent(inbound);
@@ -202,15 +210,19 @@ class TracingWorkflowInboundInterceptor implements WorkflowInboundCallsIntercept
       traceId = parsed.traceId;
       parentSpanId = parsed.parentId;
     } else {
-      const memoTraceId = typeof info.memo?.w3cTraceId === "string" ? safeId(info.memo.w3cTraceId) : null;
-      traceId = memoTraceId ?? uuid4().replace(/-/g, "").slice(0, 32);
-      while (!/^[0-9a-f]{32}$/.test(traceId)) traceId = uuid4().replace(/-/g, "").slice(0, 32);
+      const memoTraceId = typeof info.memo?.w3cTraceId === "string"
+        ? info.memo.w3cTraceId
+        : typeof info.memo?.traceId === "string"
+          ? info.memo.traceId
+          : null;
+      if (memoTraceId && /^[0-9a-f]{32}$/.test(memoTraceId.toLowerCase())) {
+        traceId = memoTraceId.toLowerCase();
+      } else {
+        traceId = deterministicHex(`${info.workflowId}:${info.runId}:trace`, 32);
+      }
     }
 
-    let spanId = uuid4().replace(/-/g, "").slice(0, 16);
-    while (!/^[0-9a-f]{16}$/.test(spanId) || /^0+$/.test(spanId)) {
-      spanId = uuid4().replace(/-/g, "").slice(0, 16);
-    }
+    const spanId = deterministicHex(`${info.workflowId}:${info.runId}:${info.attempt}:span`, 16);
 
     this.state.currentSpan = { traceId, spanId };
 
@@ -221,7 +233,9 @@ class TracingWorkflowInboundInterceptor implements WorkflowInboundCallsIntercept
     try {
       return await next(input);
     } catch (error) {
-      isError = true;
+      if (!(error instanceof ContinueAsNew || (error && typeof error === "object" && (error as any).name === "ContinueAsNew"))) {
+        isError = true;
+      }
       throw error;
     } finally {
       const durationMs = Math.max(0, Date.now() - startedAt);
@@ -305,10 +319,16 @@ class TracingWorkflowOutboundInterceptor implements WorkflowOutboundCallsInterce
   }
 }
 
-export const interceptors: (options?: WorkflowObservabilityOptions) => WorkflowInterceptorsFactory = (options) => () => {
-  const state: TracingState = { currentSpan: null };
-  return {
-    inbound: [new TracingWorkflowInboundInterceptor(state, options)],
-    outbound: [new TracingWorkflowOutboundInterceptor(state)]
+export function createWorkflowObservabilityInterceptors(
+  options?: WorkflowObservabilityOptions
+): WorkflowInterceptorsFactory {
+  return () => {
+    const state: TracingState = { currentSpan: null };
+    return {
+      inbound: [new TracingWorkflowInboundInterceptor(state, options)],
+      outbound: [new TracingWorkflowOutboundInterceptor(state)]
+    };
   };
-};
+}
+
+export const interceptors: WorkflowInterceptorsFactory = createWorkflowObservabilityInterceptors();
