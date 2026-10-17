@@ -15,18 +15,30 @@ import {
  * Main entry point for recording workflow execution histories.
  *
  * @param targetDir - Optional custom directory path to write JSON history fixtures.
+ * @param overwrite - Optional boolean to force overwriting existing fixture files.
  * @returns Resolves when recording and serialization complete.
  */
-export async function recordWorkflowHistoriesCli(targetDir?: string): Promise<void> {
-  const outputDir = targetDir || process.argv[2] || defaultHistoryFixturesDir;
-  const fixtures = await writeWorkflowHistoryFixtures(outputDir);
+export async function recordWorkflowHistoriesCli(
+  targetDir?: string,
+  overwrite?: boolean
+): Promise<void> {
+  const args = process.argv.slice(2);
+  const overwriteFlag =
+    overwrite ?? (args.includes("--overwrite") || args.includes("-f"));
+  const nonFlagArg = args.find((arg) => !arg.startsWith("-"));
+  const outputDir = targetDir || nonFlagArg || defaultHistoryFixturesDir;
+  const result = await writeWorkflowHistoryFixtures(outputDir, {
+    overwrite: overwriteFlag
+  });
   process.stdout.write(
     `${JSON.stringify(
       {
         ok: true,
         outputDir,
-        count: fixtures.length,
-        files: fixtures.map((f) => ({
+        count: result.written.length,
+        skippedCount: result.skipped.length,
+        skipped: result.skipped,
+        files: result.written.map((f) => ({
           fileName: f.fileName,
           workflowType: f.workflowType,
           branch: f.branch ?? "current",
@@ -40,4 +52,5 @@ export async function recordWorkflowHistoriesCli(targetDir?: string): Promise<vo
 }
 
 await recordWorkflowHistoriesCli();
+
 

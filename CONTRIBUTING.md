@@ -99,10 +99,10 @@ Temporal workflow changes in `apps/worker/src/*workflows*.ts` are gated in CI by
 `apps/worker/tests/fixtures/workflow-histories/`. Any change to a workflow's
 command sequence (timers, activities, child workflows, signals or `continueAsNew`)
 must be guarded with `patched("<patch-id>")` from `@temporalio/workflow`. Only
-re-record or add fixtures (`npm run temporal:record-histories -w @space/worker`)
-after adding a `patched(...)` gate (while keeping a pre-patch history for the
-legacy branch) or when registering a brand-new workflow; see
-`apps/worker/tests/fixtures/workflow-histories/README.md`.
+re-record or add fixtures (`npm run temporal:record-histories -w @space/worker -- --overwrite`)
+after adding a `patched(...)` gate (while keeping a pre-patch history fixture for
+the legacy branch) or when registering a brand-new workflow; fixture generation preserves
+existing files by default. See `apps/worker/tests/fixtures/workflow-histories/README.md`.
 
 In the maintainers' source repository, `npm run check:claims` compares the
 version, licence, Node requirement, runtime list and key constants stated in

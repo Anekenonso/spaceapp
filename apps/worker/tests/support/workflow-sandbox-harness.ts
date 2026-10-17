@@ -884,28 +884,52 @@ function sanitizeHistoryJsonValue(value: unknown): unknown {
 }
 
 /**
+ * Result of recording workflow execution histories to disk.
+ */
+export interface WriteWorkflowHistoryFixturesResult {
+  /** Array of fixtures newly written or overwritten to disk. */
+  written: RecordedWorkflowHistoryFixture[];
+  /** Array of filenames skipped because they already exist and overwrite was not enabled. */
+  skipped: string[];
+  /** All canonical fixtures generated during the run. */
+  fixtures: RecordedWorkflowHistoryFixture[];
+}
+
+/**
  * Generates canonical workflow execution histories for all workflows on a time-skipping
- * test server and writes sanitized JSON fixtures to disk.
+ * test server and writes sanitized JSON fixtures to disk. Preserves existing fixture
+ * files by default to prevent accidental overwrite of legacy or baseline histories.
  *
  * @param outputDir - Destination directory for writing JSON fixtures.
- * @returns Array of recorded history fixtures.
+ * @param options - Recording options.
+ * @param options.overwrite - Whether to overwrite existing fixture files (defaults to false).
+ * @returns Summary of written fixtures, skipped existing files, and generated fixtures.
  */
 export async function writeWorkflowHistoryFixtures(
-  outputDir = defaultHistoryFixturesDir
-): Promise<RecordedWorkflowHistoryFixture[]> {
+  outputDir = defaultHistoryFixturesDir,
+  options?: { overwrite?: boolean }
+): Promise<WriteWorkflowHistoryFixturesResult> {
   ensureQuietTemporalRuntime();
   const env = await TestWorkflowEnvironment.createTimeSkipping();
+  const overwrite = options?.overwrite ?? false;
   try {
     const fixtures = await generateCanonicalWorkflowHistories(env);
     mkdirSync(outputDir, { recursive: true });
+    const written: RecordedWorkflowHistoryFixture[] = [];
+    const skipped: string[] = [];
     for (const fixture of fixtures) {
       const targetPath = path.join(outputDir, fixture.fileName);
+      if (existsSync(targetPath) && !overwrite) {
+        skipped.push(fixture.fileName);
+        continue;
+      }
       const parsed = serializeHistoryToJsonObject(fixture.history);
       const sanitized = sanitizeHistoryJsonValue(parsed);
       const jsonText = `${JSON.stringify(sanitized, null, 2)}\n`;
       writeFileSync(targetPath, jsonText, "utf8");
+      written.push(fixture);
     }
-    return fixtures;
+    return { written, skipped, fixtures };
   } finally {
     await env.teardown();
   }

@@ -27,3 +27,12 @@ To record synthetic histories from the time-skipping test server:
 ```sh
 npm run temporal:record-histories -w @space/worker
 ```
+
+By default, `writeWorkflowHistoryFixtures` preserves existing fixture files to protect legacy and baseline histories from accidental modification. When introducing a `patched()` gate and intentionally refreshing or replacing existing fixtures, pass `--overwrite`:
+
+```sh
+npm run temporal:record-histories -w @space/worker -- --overwrite
+```
+
+To add a new history fixture for a new workflow or a patched branch variant, add its entry with a dedicated filename to `EXPECTED_HISTORY_FIXTURES` in `apps/worker/tests/support/workflow-sandbox-harness.ts` so both the legacy and patched fixtures remain tracked and replayed.
+
