@@ -182,7 +182,18 @@ async function smokeCli(image, arch) {
       throw new Error(`CLI container failed to accept connection on /run/spaceapp-cli/host.sock within timeout.\nLogs:\n${logs.stdout}\n${logs.stderr}`);
     }
 
-    process.stdout.write("CLI smoke check passed: CLI host started and accepted connection on socket.\n");
+    // Verify node-pty native binding can be loaded in cli-host environment
+    run("docker", [
+      "exec",
+      "-w",
+      "/app/packages/cli-host",
+      cliName,
+      "node",
+      "-e",
+      "const { createRequire } = require('module'); const r = createRequire(process.cwd() + '/package.json'); r('node-pty');"
+    ]);
+
+    process.stdout.write("CLI smoke check passed: CLI host started, accepted socket connection, and verified node-pty.\n");
   } finally {
     tryRun("docker", ["rm", "-f", cliName]);
   }
@@ -258,12 +269,13 @@ async function smokeBrowser(image, arch) {
       "--rm",
       "--network",
       netName,
+      "--entrypoint",
+      "node",
       "-e",
       `SPACE_DATABASE_URL=${dbUrl}`,
       image,
-      "node",
       "packages/db/dist/migrate.js"
-    ]);
+    ], { timeout: 300000 });
 
     // Start browser container
     run("docker", [

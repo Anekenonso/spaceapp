@@ -122,6 +122,9 @@ export function prepareContainerTargets({ sourceDir = rootDir, outputDir = "/app
   mkdirSync(join(cliHostDest, "dist"), { recursive: true });
   cpSync(join(cliHostSrc, "package.json"), join(cliHostDest, "package.json"));
   cpSync(join(cliHostSrc, "dist"), join(cliHostDest, "dist"), { recursive: true });
+  if (existsSync(join(cliHostSrc, "node_modules"))) {
+    cpSync(join(cliHostSrc, "node_modules"), join(cliHostDest, "node_modules"), { recursive: true });
+  }
 
   // Agent skills
   if (existsSync(join(sourceDir, "agent-skills"))) {
@@ -157,6 +160,9 @@ export function prepareContainerTargets({ sourceDir = rootDir, outputDir = "/app
   if (existsSync(join(apiSrc, "dist"))) {
     cpSync(join(apiSrc, "dist"), join(apiDest, "dist"), { recursive: true });
   }
+  if (existsSync(join(apiSrc, "node_modules"))) {
+    cpSync(join(apiSrc, "node_modules"), join(apiDest, "node_modules"), { recursive: true });
+  }
 
   // Packages needed by browser host
   const browserPackages = [
@@ -178,6 +184,12 @@ export function prepareContainerTargets({ sourceDir = rootDir, outputDir = "/app
     cpSync(join(pkgSrc, "package.json"), join(pkgDest, "package.json"));
     if (existsSync(join(pkgSrc, "dist"))) {
       cpSync(join(pkgSrc, "dist"), join(pkgDest, "dist"), { recursive: true });
+    }
+    if (pkg === "db" && existsSync(join(pkgSrc, "migrations"))) {
+      cpSync(join(pkgSrc, "migrations"), join(pkgDest, "migrations"), { recursive: true });
+    }
+    if (existsSync(join(pkgSrc, "node_modules"))) {
+      cpSync(join(pkgSrc, "node_modules"), join(pkgDest, "node_modules"), { recursive: true });
     }
   }
 
@@ -246,6 +258,9 @@ export function prepareContainerTargets({ sourceDir = rootDir, outputDir = "/app
     if (existsSync(join(appSrc, "dist"))) {
       cpSync(join(appSrc, "dist"), join(appDest, "dist"), { recursive: true });
     }
+    if (existsSync(join(appSrc, "node_modules"))) {
+      cpSync(join(appSrc, "node_modules"), join(appDest, "node_modules"), { recursive: true });
+    }
     if (app === "api") {
       const dbPy = join(appSrc, "dist/databases/sqlite-worker.py");
       const dbPySrc = join(appSrc, "src/databases/sqlite-worker.py");
@@ -272,6 +287,12 @@ export function prepareContainerTargets({ sourceDir = rootDir, outputDir = "/app
     }
     if (existsSync(join(pkgSrc, "dist"))) {
       cpSync(join(pkgSrc, "dist"), join(pkgDest, "dist"), { recursive: true });
+    }
+    if (pkg === "db" && existsSync(join(pkgSrc, "migrations"))) {
+      cpSync(join(pkgSrc, "migrations"), join(pkgDest, "migrations"), { recursive: true });
+    }
+    if (existsSync(join(pkgSrc, "node_modules"))) {
+      cpSync(join(pkgSrc, "node_modules"), join(pkgDest, "node_modules"), { recursive: true });
     }
   }
 
