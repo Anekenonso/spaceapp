@@ -215,27 +215,13 @@ Without the endpoint, every activity still writes `activity.started` and
 
 ## Traces (W3C trace context)
 
-The trace context is local by default. An optional OTLP/HTTP (JSON) exporter sends one
-SERVER span per API request when `SPACE_OTEL_EXPORTER_OTLP_ENDPOINT` is set (no
-OpenTelemetry dependency; `packages/runtime/src/otlp-span-exporter.ts`). Since
-2026-10-16 the worker and both memory workers use the same exporter (services
-`space-worker`, `space-memory-maintenance-worker`, `space-memory-mutation-worker`):
-one INTERNAL span per activity whose input carries a `traceparent`, as a child of
-that span, with the activity type, outcome and attempt only.
-- **API:** a valid inbound `traceparent` is continued (same trace ID, new span).
-  An invalid or missing header gets a new trace ID. Every API log line carries
-  `w3cTraceId` (Fastify `childLoggerFactory`).
-- **Propagation into turns:** API turn starters and the Room Agent coordinator add
-  the request's `traceparent` to the turn input (an optional contract field) and
-  to the Temporal memo. A bounded in-memory map from request ID to trace context
-  (`apps/api/src/trace-context.ts`) does this without passing the request object
-  through every service.
-- **Worker:** worker logs read the trace ID from the activity input. Internal
-  room-action calls from the worker send a child `traceparent`, so the internal
-  API request joins the same trace.
-- **Workflow code is unchanged.** Correlation is done in the API starter
-  (input/memo) and in an activity interceptor. The workflow bundle only gains the
-  optional contract field.
+The trace context is local by default. An optional OTLP/HTTP (JSON) exporter sends spans when `SPACE_OTEL_EXPORTER_OTLP_ENDPOINT` is set (no OpenTelemetry dependency; `packages/runtime/src/otlp-span-exporter.ts`):
+- **API:** one SERVER span per API request. A valid inbound `traceparent` is continued (same trace ID, new span). An invalid or missing header gets a new trace ID. Every API log line carries `w3cTraceId`.
+- **Workflows:** one INTERNAL span per workflow execution (`apps/worker/src/workflow-observability.ts`). Inbound traceparent is extracted from inbound headers, memo, or turn input. Outbound calls propagate trace context to child workflows and activities. Continuations (continue-as-new via `x-space-continue-from` or background continuation via `roomAgentContinuation.sourceTraceparent`) attach OTLP span links to the preceding span instead of fragmenting into disconnected traces.
+- **Workflow determinism:** Spans exit workflow code via Temporal sinks (`apps/worker/src/workflow-tracing-sinks.ts`) with `callDuringReplay: false`. No I/O occurs inside the workflow sandbox, and replaying workflows does not re-emit spans.
+- **Activities:** one INTERNAL span per activity execution attempt (`apps/worker/src/activity-observability.ts`), nested under the calling workflow execution span.
+- **Span attribute allowlist:** attributes are strictly filtered by an allowlist (`packages/runtime/src/span-attributes.ts`), permitting only identifiers, types, attempts, statuses, error codes, and durations. Disallowed attributes, user prompts, model outputs, URLs, and file paths are stripped.
+- **Zero new dependencies:** tracing operates purely over W3C traceparent headers, Temporal sinks/interceptors, and standard HTTP fetch for OTLP JSON export without third-party OpenTelemetry SDK dependencies.
 
 ### Replay compatibility
 
