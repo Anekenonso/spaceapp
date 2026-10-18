@@ -2330,13 +2330,17 @@ async function doctor({
           : "not reachable because Podman CLI is missing"
     });
     if (podmanEngine.code === 0) {
-      const rootless = podmanInfoJson?.host?.security?.rootless !== false;
+      const rootless = podmanInfoJson?.host?.security?.rootless === true;
       const cgroupVersion = podmanInfoJson?.host?.cgroupVersion || "v2";
       const controllers = podmanInfoJson?.host?.cgroupControllers || [];
       checks.push({
         name: "Podman rootless mode",
-        ok: true,
-        detail: rootless ? "rootless" : "rootful"
+        ok: rootless,
+        detail: rootless
+          ? "rootless"
+          : podmanInfoJson?.host?.security?.rootless === false
+            ? "rootful (SpaceApp requires rootless Podman)"
+            : "unverified (host.security.rootless missing)"
       });
       checks.push({
         name: "cgroup version",
@@ -2690,9 +2694,9 @@ Usage: ${UNIVERSAL_COMMAND} <command>
        spaceapp <command>             Optional global launcher
 
   init                              Create a local SpaceApp installation
-  install [--profile auto|small|medium|large|light|standard] [--access isolated|host-root] [--with-companions] [--no-open]
+  install [--engine docker|podman] [--profile auto|small|medium|large|light|standard] [--access isolated|host-root] [--with-companions] [--no-open]
                                     Install prerequisites, initialize, and start
-  reinstall [--keep-data] [--profile auto|small|medium|large|light|standard] [--access isolated|host-root] [--with-companions] [--no-open]
+  reinstall [--engine docker|podman] [--keep-data] [--profile auto|small|medium|large|light|standard] [--access isolated|host-root] [--with-companions] [--no-open]
                                     Clean reinstallation preserving data and credentials
   repair [--dry-run]                Verify and repair configuration and runtime files
   up | down | status | logs         Manage the Docker application
