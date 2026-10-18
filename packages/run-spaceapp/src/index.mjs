@@ -810,9 +810,10 @@ export async function prepareInstallation(root, {
       engine: engine ?? "docker"
     });
   }
-  if (config.engine && engine && config.engine !== engine) {
+  const existingEngine = config.engine ?? "docker";
+  if (engine && existingEngine !== engine) {
     throw new Error(
-      `Cannot switch container engine from "${config.engine}" to "${engine}" on an existing installation. Docker volumes are not visible to Podman. To migrate, run "${UNIVERSAL_COMMAND} backup", reinstall with --engine ${engine}, and run "${UNIVERSAL_COMMAND} restore".`
+      `Cannot switch container engine from "${existingEngine}" to "${engine}" on an existing installation. Docker volumes are not visible to Podman. To migrate, run "${UNIVERSAL_COMMAND} backup", reinstall with --engine ${engine}, and run "${UNIVERSAL_COMMAND} restore".`
     );
   }
   if (config.version !== version) {

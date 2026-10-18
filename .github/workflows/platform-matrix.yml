@@ -76,7 +76,9 @@ jobs:
         run: npm ci
 
       - name: Install SpaceApp with Podman
-        run: node packages/run-spaceapp/bin/spaceapp.mjs install --engine podman --profile small --non-interactive
+        run: >-
+          node packages/run-spaceapp/bin/spaceapp.mjs install --engine podman --profile small --non-interactive
+          --answers '{"confirm":true,"profile":"small","access":"isolated","companions":false,"telemetry":false,"open":false}'
 
       - name: Run doctor check
         run: node packages/run-spaceapp/bin/spaceapp.mjs doctor
@@ -88,7 +90,7 @@ jobs:
         run: node packages/run-spaceapp/bin/spaceapp.mjs backup
 
       - name: Test uninstall and purge
-        run: node packages/run-spaceapp/bin/spaceapp.mjs uninstall --purge-data
+        run: echo DELETE | node packages/run-spaceapp/bin/spaceapp.mjs uninstall --purge-data
 
       - name: Ensure no containers running
         run: test -z "$(podman ps -q)"

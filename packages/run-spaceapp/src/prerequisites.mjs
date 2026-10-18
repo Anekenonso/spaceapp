@@ -840,9 +840,24 @@ async function ensureMacPodman({ arch, env, stdin, stdout, stderr, execute, prof
     }
   }
   if (machine) {
-    const cpus = machine.CPUs || machine.cpus || 0;
-    const memoryMb = machine.Memory ? Math.round(machine.Memory / (1024 ** 2)) : (machine.memory || 0);
-    const diskGb = machine.DiskSize ? Math.round(machine.DiskSize / (1024 ** 3)) : (machine.diskSize || 0);
+    const res = machine.Resources ?? {};
+    const cpus = Number(res.CPUs ?? machine.CPUs ?? machine.cpus) || 0;
+    let memoryMb = 0;
+    if (res.Memory != null) {
+      memoryMb = Number(res.Memory) || 0;
+    } else if (machine.Memory) {
+      memoryMb = machine.Memory > 1000000 ? Math.round(machine.Memory / (1024 ** 2)) : machine.Memory;
+    } else if (machine.memory) {
+      memoryMb = machine.memory;
+    }
+    let diskGb = 0;
+    if (res.DiskSize != null) {
+      diskGb = Number(res.DiskSize) || 0;
+    } else if (machine.DiskSize) {
+      diskGb = machine.DiskSize > 1000000 ? Math.round(machine.DiskSize / (1024 ** 3)) : machine.DiskSize;
+    } else if (machine.diskSize) {
+      diskGb = machine.diskSize;
+    }
     if ((cpus > 0 && cpus < reqCpus) || (memoryMb > 0 && memoryMb < reqMemMb) || (diskGb > 0 && diskGb < reqDiskGb)) {
       stdout.write(
         `Warning: Podman machine resources (${cpus} CPUs, ${memoryMb} MiB RAM, ${diskGb} GiB disk) may be below requirements for profile "${profile}" (${reqCpus} CPUs, ${reqMemMb} MiB RAM, ${reqDiskGb} GiB disk).\n` +

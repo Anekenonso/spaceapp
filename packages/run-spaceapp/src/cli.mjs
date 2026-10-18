@@ -741,12 +741,20 @@ async function installCommand(args, {
     stderr,
     execute,
     engine: result.config.engine,
-    installArgs: { root, requestedProfile, requestedAccessMode, requestedEngine: result.config.engine, noOpen, autoConfirm: true, allowPodmanFallback: !wizard.explicitEngine }
+    installArgs: {
+      root,
+      requestedProfile,
+      requestedAccessMode,
+      requestedEngine: result.config.engine,
+      noOpen,
+      autoConfirm: true,
+      allowPodmanFallback: !wizard.explicitEngine && !existingConfig && result.config.accessMode !== "host-root"
+    }
   });
   if (prerequisiteResult.reexecuted) {
     return prerequisiteResult.code;
   }
-  if (prerequisiteResult.engine === "podman" || prerequisiteResult.requestedEngine === "podman") {
+  if (prerequisiteResult.engine === "podman") {
     result.config.engine = "podman";
   }
   if (prerequisiteResult.code !== 0) {

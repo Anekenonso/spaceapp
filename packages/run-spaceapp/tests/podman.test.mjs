@@ -122,6 +122,28 @@ test("prepareInstallation rejects switching engines on existing installation", a
   );
 });
 
+test("prepareInstallation rejects switching engines on legacy installation without engine field", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spaceapp-engine-switch-legacy-"));
+  const prepared = await prepareInstallation(root, {
+    version: "1.0.0",
+    profile: "small",
+    accessMode: "isolated"
+  });
+  const legacyConfig = { ...prepared.config };
+  delete legacyConfig.engine;
+  await saveConfig(root, legacyConfig);
+
+  await assert.rejects(
+    () => prepareInstallation(root, {
+      version: "1.0.0",
+      profile: "small",
+      accessMode: "isolated",
+      engine: "podman"
+    }),
+    /Cannot switch container engine from "docker" to "podman"/
+  );
+});
+
 test("prepareInstallation rejects --access host-root on Podman", async () => {
   const root = await mkdtemp(join(tmpdir(), "spaceapp-podman-host-root-"));
   await assert.rejects(
@@ -299,6 +321,41 @@ test("ensurePodmanAvailable on macOS checks podman machine sizing and warns if i
         CPUs: 2, // Required: 4 for small profile
         Memory: 4096 * 1024 * 1024, // 4 GiB, Required: 7GiB
         DiskSize: 20 * 1024 * 1024 * 1024
+      }]));
+      return 0;
+    }
+    return 0;
+  };
+
+  const res = await ensurePodmanAvailable({
+    platform: "darwin",
+    arch: "arm64",
+    env: {},
+    stdin: null,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    execute,
+    profile: "small",
+    sleep: async () => {}
+  });
+
+  assert.equal(res.code, 0);
+  assert.match(stdout.value(), /podman machine set --cpus 4 --memory 7168/);
+});
+
+test("ensurePodmanAvailable on macOS checks Podman 5 Resources shape", async () => {
+  const stdout = captureStream();
+  const stderr = captureStream();
+
+  const execute = async (spec, io) => {
+    if (spec.command === "podman" && spec.args?.[0] === "machine" && spec.args?.[1] === "inspect") {
+      io?.stdout?.write(JSON.stringify([{
+        Running: true,
+        Resources: {
+          CPUs: 2,
+          Memory: 4096,
+          DiskSize: 20
+        }
       }]));
       return 0;
     }
