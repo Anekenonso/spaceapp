@@ -82,22 +82,33 @@ describe("3D memory projection", () => {
 });
 
 describe("Synthetic benchmark graph generator", () => {
-  it("generates synthetic memory graphs at 2k, 10k, and 50k nodes with valid topologies", async () => {
-    const { createSyntheticBenchmarkGraph } = await import("../src/demo/DemoStore.js");
+  it("generates synthetic memory graphs at 2k, 10k, and 50k nodes with valid topologies and exact 150k edges target", async () => {
+    const { createSyntheticBenchmarkGraph, DemoStore } = await import("../src/demo/DemoStore.js");
 
     const g2k = createSyntheticBenchmarkGraph(2000);
     expect(g2k.nodes).toHaveLength(2000);
-    expect(g2k.edges.length).toBeGreaterThan(1800);
+    expect(g2k.edges).toHaveLength(6000);
     expect(g2k.summary.nodeCount).toBe(2000);
     expect(g2k.nodes[0]!.id).toBe("source:root");
 
     const g10k = createSyntheticBenchmarkGraph(10000);
     expect(g10k.nodes).toHaveLength(10000);
-    expect(g10k.edges.length).toBeGreaterThan(9000);
+    expect(g10k.edges).toHaveLength(30000);
 
     const g50k = createSyntheticBenchmarkGraph(50000);
     expect(g50k.nodes).toHaveLength(50000);
-    expect(g50k.edges.length).toBeGreaterThan(45000);
+    expect(g50k.edges).toHaveLength(150000);
+
+    // Verify benchmark queries without explicit limit default to benchmark size
+    const store = new DemoStore();
+    const overviewRes = await (store.api as any).memoryGraphOverview({ q: "benchmark" });
+    expect(overviewRes.data.nodes).toHaveLength(50000);
+    expect(overviewRes.data.edges).toHaveLength(150000);
+
+    // Verify detail request for benchmark node succeeds
+    const nodeDetailRes = await (store.api as any).memoryGraphNode("memory:0-0");
+    expect(nodeDetailRes.node.id).toBe("memory:0-0");
+    expect(nodeDetailRes.node.type).toBe("MEMORY");
   });
 });
 

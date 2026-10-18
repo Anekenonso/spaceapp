@@ -224,6 +224,23 @@ export function createSyntheticBenchmarkGraph(targetNodes = 2000): MemoryGraphPa
     created++;
   }
 
+  // Deterministically generate cross-edges to reach target edge count (3 edges per node, e.g. 150,000 edges for 50,000 nodes)
+  const targetEdgeCount = nodeCount >= 50000 ? 150000 : Math.round(nodeCount * 3);
+  let edgeIndex = edges.length;
+  while (edges.length < targetEdgeCount && nodes.length > 2) {
+    const srcIdx = (edgeIndex * 7 + 1) % nodes.length;
+    const tgtIdx = (edgeIndex * 13 + 3) % nodes.length;
+    if (srcIdx !== tgtIdx) {
+      edges.push({
+        id: `edge:cross-${edgeIndex}`,
+        source: nodes[srcIdx]!.id,
+        target: nodes[tgtIdx]!.id,
+        type: edgeIndex % 2 === 0 ? "TAGGED_WITH" : "SEMANTICALLY_RELATED"
+      });
+    }
+    edgeIndex++;
+  }
+
   return {
     version: 2,
     layoutVersion: 2,
@@ -1596,13 +1613,28 @@ export class DemoStore {
       }
       case "memoryGraphOverview": {
         const query = (args[0] ?? {}) as DemoMemoryGraphQuery;
-        if (query.limit && (query.limit === 2000 || query.limit === 10000 || query.limit === 50000 || query.q?.toLowerCase().includes("benchmark"))) {
-          const synth = createSyntheticBenchmarkGraph(query.limit);
+        const isBenchmarkQuery = Boolean(query.q && query.q.toLowerCase().includes("benchmark"));
+        const isExplicitBenchmarkLimit = query.limit === 2000 || query.limit === 10000 || query.limit === 50000;
+        if (isBenchmarkQuery || (isExplicitBenchmarkLimit && !query.nodeType)) {
+          const limit = isBenchmarkQuery && !query.limit ? 50000 : (query.limit ?? 2000);
+          const synth = createSyntheticBenchmarkGraph(limit);
+          let matchingNodes = synth.nodes;
+          if (query.q && query.q.toLowerCase() !== "benchmark") {
+            const qLower = query.q.toLowerCase();
+            matchingNodes = matchingNodes.filter(n => n.label.toLowerCase().includes(qLower));
+          }
+          if (query.nodeType) {
+            matchingNodes = matchingNodes.filter(n => n.type === query.nodeType);
+          }
+          const matchingNodeIds = new Set(matchingNodes.map(n => n.id));
+          const matchingEdges = synth.edges.filter(e => matchingNodeIds.has(e.source) && matchingNodeIds.has(e.target));
           return Promise.resolve({
             data: {
               ...synth,
-              totalMatchingNodes: synth.nodes.length,
-              totalMatchingEdges: synth.edges.length,
+              nodes: matchingNodes,
+              edges: matchingEdges,
+              totalMatchingNodes: matchingNodes.length,
+              totalMatchingEdges: matchingEdges.length,
               truncated: false
             }
           });
@@ -1685,7 +1717,23 @@ export class DemoStore {
       }
       case "memoryConsolidation": return Promise.resolve(structuredClone(this.fixture.memoryWorkspace.maintenanceDetail));
       case "memoryGraphNode": {
-        const detail = this.fixture.memoryWorkspace.nodeDetails[roomId ?? ""];
+        let detail = this.fixture.memoryWorkspace.nodeDetails[roomId ?? ""];
+        if (!detail && roomId && (roomId.startsWith("memory:") || roomId.startsWith("source:") || roomId.startsWith("topic:"))) {
+          const type = roomId.startsWith("source:") ? ("SOURCE" as const) : roomId.startsWith("topic:") ? ("TOPIC" as const) : ("MEMORY" as const);
+          detail = {
+            node: {
+              id: roomId,
+              type,
+              label: roomId.replace(/^[^:]+:/, ""),
+              sourcePath: `/opt/spaceapp/docs/${roomId.replace(/:/g, "_")}.md`,
+              recordId: roomId
+            },
+            summary: `Benchmark node detail for ${roomId}`,
+            neighbors: [],
+            issues: [],
+            changeSets: []
+          } as any;
+        }
         if (!detail) throw new SpaceApiError("Memory node not found.", { status: 404, code: "NOT_FOUND" });
         return Promise.resolve(structuredClone(detail));
       }
