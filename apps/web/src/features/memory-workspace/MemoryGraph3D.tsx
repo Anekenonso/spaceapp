@@ -231,8 +231,18 @@ export function MemoryGraph3D({ nodes, edges, positions, coordinates, showTitles
   const cameraRef = useRef<MemoryCamera3D>({ ...DEFAULT_MEMORY_CAMERA });
   const redrawRef = useRef<() => void>(() => {});
   const [isWebGL, setIsWebGL] = useState(true);
+  const restorationCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const restorationListenerRef = useRef<EventListener | null>(null);
   const current = useRef({ nodes, edges, positions, coordinates, showTitles, selectedNodeId, onSelectNode });
   current.current = { nodes, edges, positions, coordinates, showTitles, selectedNodeId, onSelectNode };
+
+  useEffect(() => {
+    return () => {
+      const canvas = restorationCanvasRef.current;
+      const listener = restorationListenerRef.current;
+      if (canvas && listener) canvas.removeEventListener("webglcontextrestored", listener);
+    };
+  }, []);
 
   useEffect(() => {
     cameraRef.current = { ...DEFAULT_MEMORY_CAMERA };
@@ -442,8 +452,8 @@ export function MemoryGraph3D({ nodes, edges, positions, coordinates, showTitles
           builtFrom = { nodes, edges, positions, coordinates };
         }
 
-        // Run GPU picking at most once per animation frame, skipping while dragging
-        if (pendingPick && !dragged) {
+        // Run GPU picking at most once per animation frame, skipping while pointer is active or dragging
+        if (pendingPick && pointers.size === 0) {
           const picked = hitGPU(pendingPick.x, pendingPick.y);
           if (picked !== hoverId) {
             hoverId = picked;
@@ -672,10 +682,17 @@ export function MemoryGraph3D({ nodes, edges, positions, coordinates, showTitles
 
       const onContextLost = (e: Event) => {
         e.preventDefault();
+        restorationCanvasRef.current = canvas;
+        restorationListenerRef.current = onContextRestored;
         setIsWebGL(false);
       };
 
       const onContextRestored = () => {
+        canvas.removeEventListener("webglcontextrestored", onContextRestored);
+        if (restorationCanvasRef.current === canvas) {
+          restorationCanvasRef.current = null;
+          restorationListenerRef.current = null;
+        }
         setIsWebGL(true);
       };
 
@@ -686,7 +703,7 @@ export function MemoryGraph3D({ nodes, edges, positions, coordinates, showTitles
 
       return () => {
         canvas.removeEventListener("webglcontextlost", onContextLost);
-        canvas.removeEventListener("webglcontextrestored", onContextRestored);
+        // Note: webglcontextrestored is preserved on lost canvas across 2D fallback remount
         observer.disconnect(); cancelAnimationFrame(frame); redrawRef.current = () => {};
         canvas.removeEventListener("pointerdown", down); canvas.removeEventListener("pointermove", move); canvas.removeEventListener("pointerup", up); canvas.removeEventListener("pointercancel", cancel); canvas.removeEventListener("wheel", wheel); canvas.removeEventListener("keydown", key);
         if (gl) {

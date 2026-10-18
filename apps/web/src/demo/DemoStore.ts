@@ -226,19 +226,25 @@ export function createSyntheticBenchmarkGraph(targetNodes = 2000): MemoryGraphPa
 
   // Deterministically generate cross-edges to reach target edge count (3 edges per node, e.g. 150,000 edges for 50,000 nodes)
   const targetEdgeCount = nodeCount >= 50000 ? 150000 : Math.round(nodeCount * 3);
-  let edgeIndex = edges.length;
-  while (edges.length < targetEdgeCount && nodes.length > 2) {
-    const srcIdx = (edgeIndex * 7 + 1) % nodes.length;
-    const tgtIdx = (edgeIndex * 13 + 3) % nodes.length;
-    if (srcIdx !== tgtIdx) {
-      edges.push({
-        id: `edge:cross-${edgeIndex}`,
-        source: nodes[srcIdx]!.id,
-        target: nodes[tgtIdx]!.id,
-        type: edgeIndex % 2 === 0 ? "TAGGED_WITH" : "SEMANTICALLY_RELATED"
-      });
+  const seenPairs = new Set(edges.map((e) => `${e.source}|${e.target}`));
+  let crossEdgeCount = 0;
+  let offset = 1;
+  while (edges.length < targetEdgeCount && offset < nodes.length) {
+    for (let i = 0; i < nodes.length && edges.length < targetEdgeCount; i++) {
+      const srcId = nodes[i]!.id;
+      const tgtId = nodes[(i + offset) % nodes.length]!.id;
+      const pairKey = `${srcId}|${tgtId}`;
+      if (!seenPairs.has(pairKey)) {
+        seenPairs.add(pairKey);
+        edges.push({
+          id: `edge:cross-${crossEdgeCount++}`,
+          source: srcId,
+          target: tgtId,
+          type: crossEdgeCount % 2 === 0 ? "TAGGED_WITH" : "SEMANTICALLY_RELATED"
+        });
+      }
     }
-    edgeIndex++;
+    offset++;
   }
 
   return {
@@ -1615,7 +1621,8 @@ export class DemoStore {
         const query = (args[0] ?? {}) as DemoMemoryGraphQuery;
         const isBenchmarkQuery = Boolean(query.q && query.q.toLowerCase().includes("benchmark"));
         const isExplicitBenchmarkLimit = query.limit === 2000 || query.limit === 10000 || query.limit === 50000;
-        if (isBenchmarkQuery || (isExplicitBenchmarkLimit && !query.nodeType)) {
+        const hasOtherFilters = Boolean(query.scope || query.roomId || query.sourcePath || query.lifecycleStatus || (query.month && query.month !== "all"));
+        if ((isBenchmarkQuery || (isExplicitBenchmarkLimit && !query.nodeType && !query.q)) && !hasOtherFilters) {
           const limit = isBenchmarkQuery && !query.limit ? 50000 : (query.limit ?? 2000);
           const synth = createSyntheticBenchmarkGraph(limit);
           let matchingNodes = synth.nodes;
@@ -1633,6 +1640,11 @@ export class DemoStore {
               ...synth,
               nodes: matchingNodes,
               edges: matchingEdges,
+              filters: {
+                ...synth.filters,
+                q: query.q ?? null,
+                nodeType: query.nodeType ?? null
+              },
               totalMatchingNodes: matchingNodes.length,
               totalMatchingEdges: matchingEdges.length,
               truncated: false
@@ -1720,19 +1732,35 @@ export class DemoStore {
         let detail = this.fixture.memoryWorkspace.nodeDetails[roomId ?? ""];
         if (!detail && roomId && (roomId.startsWith("memory:") || roomId.startsWith("source:") || roomId.startsWith("topic:"))) {
           const type = roomId.startsWith("source:") ? ("SOURCE" as const) : roomId.startsWith("topic:") ? ("TOPIC" as const) : ("MEMORY" as const);
+          const label = roomId === "source:root"
+            ? "gemini.md"
+            : roomId.startsWith("source:cluster-")
+            ? `cluster_${roomId.slice("source:cluster-".length)}.md`
+            : roomId.startsWith("memory:") && roomId.includes("-")
+            ? `Memory #${roomId.replace("memory:", "")}`
+            : roomId.replace(/^[^:]+:/, "");
+          const sourcePath = roomId === "source:root" || roomId.startsWith("memory:extra-")
+            ? "/opt/spaceapp/docs/gemini.md"
+            : roomId.startsWith("source:cluster-")
+            ? `/opt/spaceapp/docs/cluster_${roomId.slice("source:cluster-".length)}.md`
+            : roomId.startsWith("memory:") && roomId.includes("-")
+            ? `/opt/spaceapp/docs/cluster_${roomId.slice("memory:".length).split("-")[0]}.md`
+            : `/opt/spaceapp/docs/${roomId.replace(/:/g, "_")}.md`;
+          const recordId = type === "MEMORY" ? roomId : null;
+
           detail = {
             node: {
               id: roomId,
               type,
-              label: roomId.replace(/^[^:]+:/, ""),
-              sourcePath: `/opt/spaceapp/docs/${roomId.replace(/:/g, "_")}.md`,
-              recordId: roomId
+              label,
+              sourcePath,
+              recordId
             },
-            summary: `Benchmark node detail for ${roomId}`,
-            neighbors: [],
-            issues: [],
-            changeSets: []
-          } as any;
+            record: null,
+            relatedNodes: [],
+            relatedEdges: [],
+            issues: []
+          };
         }
         if (!detail) throw new SpaceApiError("Memory node not found.", { status: 404, code: "NOT_FOUND" });
         return Promise.resolve(structuredClone(detail));
