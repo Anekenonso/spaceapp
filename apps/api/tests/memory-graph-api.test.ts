@@ -434,6 +434,22 @@ describe("Memory graph API", () => {
     await app.close();
   });
 
+  it("honors the limit query param up to 50,000 nodes for large archives", async () => {
+    const graphSnapshot = snapshot() as MemoryGraphSnapshot;
+    graphSnapshot.nodes = Array.from({ length: 2200 }, (_, index) => ({ id: `memory:${String(index).padStart(4, "0")}`, type: "MEMORY" as const, label: `Memory ${index}`, sourcePath: null, recordId: null }));
+    graphSnapshot.nodes.push({ id: "topic:important", type: "TOPIC", label: "Important", sourcePath: null, recordId: null });
+    graphSnapshot.nodes.push({ id: "source:root", type: "SOURCE", label: "gemini.md", sourcePath: "/opt/spaceapp/docs/gemini.md", recordId: null });
+    graphSnapshot.edges = [{ id: "edge:tag", source: "memory:2199", target: "topic:important", type: "TAGGED_WITH", origin: "EXPLICIT_TAG", confidence: 1, evidence: "Explicit tag in canonical memory." }];
+    const app = await memoryGraphApp(true, new InMemorySpaceStore(), false, undefined, { graphSnapshot });
+    const response = await app.inject({ method: "GET", url: "/api/admin/memory/graph/overview?limit=3000", headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const data = response.json().data;
+    expect(data.nodes).toHaveLength(2202);
+    expect(data.truncated).toBe(false);
+    expect(data.totalMatchingNodes).toBe(2202);
+    await app.close();
+  });
+
   it("serves the all-months archive and single-month filtering through the month query param", async () => {
     const graphSnapshot = snapshot() as MemoryGraphSnapshot;
     const archiveSnapshot = snapshot() as MemoryGraphSnapshot;

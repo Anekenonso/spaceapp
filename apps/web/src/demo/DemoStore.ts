@@ -21,6 +21,7 @@ import type {
   CreateUserLinkRequest,
   MemoryChangeSet,
   MemoryChangeSetSummary,
+  MemoryGraphEdge,
   MemoryGraphNode,
   MemoryGraphPayload,
   Pane,
@@ -148,7 +149,111 @@ type DemoMemoryGraphQuery = {
   relationMode?: "CLUSTERED" | "RELATIONS";
   page?: number;
   pageSize?: number;
+  limit?: number;
 };
+
+export function createSyntheticBenchmarkGraph(targetNodes = 2000): MemoryGraphPayload {
+  const nodeCount = Math.max(10, Math.min(50_000, targetNodes));
+  const nodes: MemoryGraphNode[] = [];
+  const edges: MemoryGraphEdge[] = [];
+
+  nodes.push({
+    id: "source:root",
+    type: "SOURCE",
+    label: "gemini.md",
+    sourcePath: "/opt/spaceapp/docs/gemini.md",
+    recordId: null
+  });
+
+  const numClusters = Math.max(5, Math.floor(nodeCount / 40));
+  const memoryPerCluster = Math.max(1, Math.floor((nodeCount - 1 - numClusters) / numClusters));
+  let created = 1;
+
+  for (let c = 0; c < numClusters && created < nodeCount; c++) {
+    const sourceId = `source:cluster-${c}`;
+    nodes.push({
+      id: sourceId,
+      type: "SOURCE",
+      label: `cluster_${c}.md`,
+      sourcePath: `/opt/spaceapp/docs/cluster_${c}.md`,
+      recordId: null
+    });
+    created++;
+    edges.push({
+      id: `edge:root-${c}`,
+      source: "source:root",
+      target: sourceId,
+      type: "DERIVED_FROM"
+    });
+
+    const toMake = Math.min(memoryPerCluster, nodeCount - created);
+    for (let m = 0; m < toMake; m++) {
+      const memId = `memory:${c}-${m}`;
+      nodes.push({
+        id: memId,
+        type: "MEMORY",
+        label: `Memory #${c * 1000 + m} (Cluster ${c})`,
+        sourcePath: `/opt/spaceapp/docs/cluster_${c}.md`,
+        recordId: memId
+      });
+      created++;
+      edges.push({
+        id: `edge:${sourceId}-${memId}`,
+        source: sourceId,
+        target: memId,
+        type: "CONTAINS"
+      });
+    }
+  }
+
+  while (created < nodeCount) {
+    const memId = `memory:extra-${created}`;
+    nodes.push({
+      id: memId,
+      type: "MEMORY",
+      label: `Extra Memory #${created}`,
+      sourcePath: "/opt/spaceapp/docs/gemini.md",
+      recordId: memId
+    });
+    edges.push({
+      id: `edge:extra-${created}`,
+      source: "source:root",
+      target: memId,
+      type: "CONTAINS"
+    });
+    created++;
+  }
+
+  return {
+    version: 2,
+    layoutVersion: 2,
+    taxonomyVersion: 2,
+    revisionHash: `benchmark-${nodeCount}`.padEnd(64, "0"),
+    sourceHash: `source-${nodeCount}`.padEnd(64, "0"),
+    generatedAt: "2026-10-18T10:00:00.000Z",
+    isStale: false,
+    summary: {
+      sourceCount: numClusters + 1,
+      recordCount: nodes.filter(n => n.type === "MEMORY").length,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      issueCount: 0
+    },
+    nodes,
+    edges,
+    filters: {
+      q: null,
+      nodeType: null,
+      scope: null,
+      roomId: null,
+      sourcePath: null,
+      lifecycleStatus: null,
+      relationMode: "RELATIONS",
+      month: null
+    },
+    months: []
+  };
+}
 
 function memoryChangeSetSummary(changeSet: MemoryChangeSet): MemoryChangeSetSummary {
   const { beforeSnapshot: _before, afterSnapshot: _after, ...summary } = changeSet;
@@ -1490,7 +1595,19 @@ export class DemoStore {
         });
       }
       case "memoryGraphOverview": {
-        const graph = this.memoryGraph((args[0] ?? {}) as DemoMemoryGraphQuery);
+        const query = (args[0] ?? {}) as DemoMemoryGraphQuery;
+        if (query.limit && (query.limit === 2000 || query.limit === 10000 || query.limit === 50000 || query.q?.toLowerCase().includes("benchmark"))) {
+          const synth = createSyntheticBenchmarkGraph(query.limit);
+          return Promise.resolve({
+            data: {
+              ...synth,
+              totalMatchingNodes: synth.nodes.length,
+              totalMatchingEdges: synth.edges.length,
+              truncated: false
+            }
+          });
+        }
+        const graph = this.memoryGraph(query);
         return Promise.resolve({ data: { ...graph, totalMatchingNodes: graph.nodes.length, totalMatchingEdges: graph.edges.length, truncated: false } });
       }
       case "memoryCalendar": {
