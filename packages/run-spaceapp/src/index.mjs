@@ -111,6 +111,7 @@ const CONFIG_KEYS = new Set([
   "telemetry",
   "profile",
   "accessMode",
+  "engine",
   "workspaces",
   "companionsEnabled",
   "optionalModules",
@@ -288,14 +289,15 @@ export function createDefaultConfig({
   version,
   profile = "light",
   accessMode = "isolated",
-  companionsEnabled = false
+  companionsEnabled = false,
+  engine
 }) {
   assertVersion(version);
   if (!INSTALL_PROFILES.includes(profile)) {
     throw new Error("Default config requires a resolved installation profile.");
   }
   const resolvedAccessMode = resolveInstallAccessMode(accessMode);
-  return {
+  const config = {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     version,
     previousVersion: null,
@@ -308,6 +310,10 @@ export function createDefaultConfig({
     optionalModules: "none",
     workspaces: []
   };
+  if (engine !== undefined) {
+    config.engine = engine;
+  }
+  return config;
 }
 
 export function validateConfig(config) {
@@ -343,6 +349,9 @@ export function validateConfig(config) {
   }
   if (config.accessMode !== "isolated" && config.accessMode !== "host-root") {
     throw new Error("accessMode must be isolated or host-root.");
+  }
+  if (config.engine !== undefined && config.engine !== "docker" && config.engine !== "podman") {
+    throw new Error("engine must be docker or podman.");
   }
   if (typeof config.companionsEnabled !== "boolean") {
     throw new Error("companionsEnabled must be boolean.");
@@ -557,6 +566,7 @@ export function renderRuntimeEnv(config) {
     `SPACEAPP_TELEMETRY=${config.telemetry}`,
     `SPACEAPP_INSTALL_ID=${config.installId ?? ""}`,
     `SPACEAPP_PROFILE=${safeEnv(config.profile)}`,
+    `SPACEAPP_CONTAINER_ENGINE=${config.engine ?? "docker"}`,
     `SPACEAPP_BROWSER_ENABLED=${settings.browserEnabled}`,
     `SPACEAPP_WORKFLOWS_ENABLED=${settings.temporalEnabled}`,
     `SPACEAPP_CORE_MEMORY_LIMIT=${settings.coreMemoryLimit}`,
@@ -581,7 +591,11 @@ export function renderWorkspaceCompose(config) {
     "      - type: bind",
     `        source: ${JSON.stringify(workspace.hostPath)}`,
     `        target: ${JSON.stringify(workspace.containerPath)}`,
-    `        read_only: ${workspace.readOnly}`
+    `        read_only: ${workspace.readOnly}`,
+    ...(config.engine === "podman" ? [
+      "        bind:",
+      "          selinux: z"
+    ] : [])
   ]);
   const service = mounts.length > 0
     ? ["    volumes:", ...mounts]
@@ -631,6 +645,7 @@ export function composeCommand(action, root, options = {}) {
   validateHome(stateRoot);
   const profile = options.profile ?? "standard";
   const settings = profileRuntimeSettings(profile);
+  const engine = options.engine ?? "docker";
   const base = [
     "compose",
     "--project-name", composeProjectName(root),
@@ -731,7 +746,7 @@ export function composeCommand(action, root, options = {}) {
   if (!selected) {
     throw new Error(`Unsupported Compose action "${action}".`);
   }
-  return { command: "docker", args: [...base, ...selected] };
+  return { command: engine === "podman" ? "podman" : "docker", args: [...base, ...selected] };
 }
 
 export function composeProjectName(root) {
@@ -768,7 +783,8 @@ export async function prepareInstallation(root, {
   version,
   profile,
   accessMode,
-  companionsEnabled
+  companionsEnabled,
+  engine
 }) {
   validateHome(root);
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -790,8 +806,14 @@ export async function prepareInstallation(root, {
       version,
       profile: resolvedProfile ?? "light",
       accessMode: resolveInstallAccessMode(accessMode),
-      companionsEnabled
+      companionsEnabled,
+      engine: engine ?? "docker"
     });
+  }
+  if (config.engine && engine && config.engine !== engine) {
+    throw new Error(
+      `Cannot switch container engine from "${config.engine}" to "${engine}" on an existing installation. Docker volumes are not visible to Podman. To migrate, run "${UNIVERSAL_COMMAND} backup", reinstall with --engine ${engine}, and run "${UNIVERSAL_COMMAND} restore".`
+    );
   }
   if (config.version !== version) {
     config = {
@@ -809,6 +831,12 @@ export async function prepareInstallation(root, {
   }
   if (companionsEnabled !== undefined && config.companionsEnabled !== companionsEnabled) {
     config = { ...config, companionsEnabled };
+  }
+  if (engine !== undefined && config.engine !== engine) {
+    config = { ...config, engine };
+  }
+  if (config.engine === "podman" && config.accessMode === "host-root") {
+    throw new Error("--access host-root is not supported on Podman. Use --access isolated.");
   }
   validateConfig(config);
 
