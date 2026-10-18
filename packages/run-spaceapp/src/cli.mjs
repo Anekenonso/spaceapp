@@ -338,7 +338,7 @@ export async function run(argv, {
   if (globalFlags.localImages) {
     const originalExecute = execute;
     execute = async (spec, io) => {
-      if (spec.command === "docker" && spec.args?.includes("compose")) {
+      if ((spec.command === "docker" || spec.command === "podman") && spec.args?.includes("compose")) {
         if (spec.args.at(-1) === "pull") {
           stdout.write("Local images only: skipping registry downloads; missing images will fail startup.\n");
           return 0;
@@ -786,7 +786,10 @@ async function installCommand(args, {
     inspectResources,
     resources,
     profile,
-    dockerReady: true, operation, storagePlan
+    engine: result.config.engine,
+    dockerReady: result.config.engine === "docker",
+    operation,
+    storagePlan
   });
   if (doctorCode !== 0) {
     stderr.write(
@@ -1259,6 +1262,12 @@ function hasRequestedConfigChange(rawExisting, parsed) {
   if (parsed.requestedProfile !== "auto" && rawExisting.profile !== parsed.requestedProfile) {
     return true;
   }
+  if (
+    parsed.requestedEngine !== undefined &&
+    (rawExisting.engine ?? "docker") !== parsed.requestedEngine
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -1310,7 +1319,8 @@ async function repairRuntime({ root, config, platform, stdin, stdout, stderr, ex
     ...plan.actions.map((action) => action.detail)
   ])) return 1;
   const prerequisites = await ensureDocker({platform, arch, env, stdin, stdout, stderr, execute, sleep: sleep || wait,
-    installArgs: {root,requestedProfile:repaired.profile,requestedAccessMode:repaired.accessMode,noOpen:true,autoConfirm:true}});
+    engine: config?.engine ?? repaired.engine,
+    installArgs: {root,requestedProfile:repaired.profile,requestedAccessMode:repaired.accessMode,noOpen:true,autoConfirm:true,requestedEngine:config?.engine ?? repaired.engine}});
   if(prerequisites.reexecuted || prerequisites.code !== 0) return prerequisites.code;
   config = repaired;
   if (await verifyStorage({ root, config, existingConfig: config, operation: "repair", inspectResources, execute, stdout, stderr }) !== 0) return 1;
@@ -2107,7 +2117,7 @@ async function factoryResetCommand({
     await rm(join(root, "compose.yml"), { force: true });
   } catch {}
 
-  const result = await initializeInstallation(root, { version: runtimeVersion });
+  const result = await initializeInstallation(root, { version: runtimeVersion, engine: config?.engine });
   stdout.write(`SpaceApp factory reset complete. Clean installation initialized at ${root}\n`);
   if (result.setupToken) {
     stdout.write(`One-time setup token: ${result.setupToken}\n`);
@@ -2190,7 +2200,8 @@ async function updateCommand(args, { root, config, version, platform, stdin, std
     }
   }
   const prerequisites = await ensureDocker({ platform, arch, env, stdin, stdout, stderr, execute,
-    installArgs: { root, requestedProfile: config.profile, noOpen: true, autoConfirm: true } });
+    engine: config.engine,
+    installArgs: { root, requestedProfile: config.profile, noOpen: true, autoConfirm: true, requestedEngine: config.engine } });
   if (prerequisites.reexecuted || prerequisites.code !== 0) return prerequisites.code;
   const resources = await inspectResources(root);
   const storagePlan = await inspectStoragePlan({ root, config: { ...config, version: targetVersion }, existingConfig: config, resources, execute, operation: "upgrade" });
@@ -2283,9 +2294,7 @@ async function doctor({
           done();
         }
       });
-      const code = dockerReady
-        ? 0
-        : await execute(probe, { stdin, stdout: probeStdout, stderr: null });
+      const code = await execute(probe, { stdin, stdout: probeStdout, stderr: null });
       if (probe.name === "Podman Engine" && code === 0) {
         try { podmanInfoJson = JSON.parse(output); } catch {}
       }

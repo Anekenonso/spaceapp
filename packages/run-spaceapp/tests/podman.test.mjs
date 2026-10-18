@@ -9,6 +9,8 @@ import {
   createDefaultConfig,
   renderWorkspaceCompose,
   prepareInstallation,
+  initializeInstallation,
+  loadConfig,
   validateConfig,
   saveConfig
 } from "../src/index.mjs";
@@ -36,6 +38,13 @@ function captureStream() {
 
 function dummyStdin() {
   const stream = Readable.from([]);
+  stream._spaceappBuffer = "";
+  return stream;
+}
+
+function ttyStdin(text) {
+  const stream = Readable.from([`${text}\n`]);
+  stream.isTTY = true;
   stream._spaceappBuffer = "";
   return stream;
 }
@@ -406,3 +415,86 @@ test("ensureDockerAvailable falls back to Podman when Docker is missing and Podm
   assert.equal(installArgs.requestedEngine, "podman");
   assert.match(stdout.value(), /Using Podman container engine/);
 });
+
+test("local image mode with podman engine skips pull and passes --pull never on up", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spaceapp-local-images-podman-"));
+  const config = createDefaultConfig({ version: "0.1.30", engine: "podman" });
+  await saveConfig(root, config);
+
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const calls = [];
+
+  const exitCode = await run(["up", "--local-images"], {
+    env: { SPACEAPP_HOME: root },
+    platform: "linux",
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    stdin: dummyStdin(),
+    execute: async (spec) => {
+      calls.push(spec);
+      return 0;
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  const up = calls.find((x) => x.command === "podman" && x.args?.includes("up"));
+  assert.ok(up, "podman compose up must be called");
+  assert.deepEqual(up.args.slice(up.args.indexOf("up"), up.args.indexOf("up") + 3), ["up", "--pull", "never"]);
+});
+
+test("factory-reset preserves configured podman engine in newly initialized installation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spaceapp-factory-reset-podman-"));
+  await initializeInstallation(root, { version: "0.1.30", engine: "podman" });
+
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const calls = [];
+
+  const exitCode = await run(["factory-reset"], {
+    env: { SPACEAPP_HOME: root },
+    platform: "linux",
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    stdin: ttyStdin("FACTORY-RESET"),
+    execute: async (spec, io) => {
+      if (spec.args?.includes("pg_dump")) {
+        io?.stdout?.write("-- PostgreSQL database dump\nSELECT 1;\n");
+        return 0;
+      }
+      calls.push(spec);
+      return 0;
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.match(stdout.value(), /SpaceApp factory reset complete/);
+  const reloaded = await loadConfig(root);
+  assert.equal(reloaded.engine, "podman");
+});
+
+test("same-version install with explicit engine switch rejects instead of repairing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spaceapp-engine-switch-"));
+  await initializeInstallation(root, { version: "0.1.30", engine: "docker" });
+
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const calls = [];
+
+  await assert.rejects(
+    run(["install", "--engine", "podman", "--non-interactive", "--answers", '{"confirm":true,"open":false}'], {
+      env: { SPACEAPP_HOME: root },
+      platform: "linux",
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdin: dummyStdin(),
+      execute: async (spec) => {
+        calls.push(spec);
+        return 0;
+      },
+      request: async () => ({ ok: true, status: 200 })
+    }),
+    /Cannot switch container engine from "docker" to "podman"/
+  );
+});
+
