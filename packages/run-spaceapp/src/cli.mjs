@@ -2022,10 +2022,12 @@ async function supportBundleCommand({
         const parsed = JSON.parse(infoOutput);
         if (engineName === "podman") {
           bundle.engine.version = parsed?.version?.Version ?? null;
-          bundle.engine.rootless = parsed?.host?.security?.rootless !== false;
+          bundle.engine.rootless = typeof parsed?.host?.security?.rootless === "boolean"
+            ? parsed.host.security.rootless
+            : null;
           bundle.engine.cgroupVersion = parsed?.host?.cgroupVersion || "v2";
           const controllers = parsed?.host?.cgroupControllers || [];
-          bundle.engine.limitsDelegated = bundle.engine.cgroupVersion === "v2" && (!bundle.engine.rootless || (controllers.includes("cpu") && controllers.includes("memory")));
+          bundle.engine.limitsDelegated = bundle.engine.cgroupVersion === "v2" && (bundle.engine.rootless === false || (controllers.includes("cpu") && controllers.includes("memory")));
         } else {
           bundle.engine.version = parsed?.ServerVersion ?? null;
           bundle.engine.rootless = parsed?.SecurityOptions?.some((s) => typeof s === "string" && s.toLowerCase().includes("rootless")) ?? false;

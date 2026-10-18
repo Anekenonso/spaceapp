@@ -358,6 +358,43 @@ test("support-bundle includes engine facts for podman", async () => {
   assert.equal(bundle.engine.limitsDelegated, true);
 });
 
+test("support-bundle reports rootless: null when host.security.rootless is missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spaceapp-bundle-podman-null-"));
+  const config = createDefaultConfig({ version: "1.0.0", engine: "podman" });
+  await saveConfig(root, config);
+
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const bundlePath = join(root, "bundle.json");
+
+  const code = await run(["support-bundle", "--out", bundlePath], {
+    env: { SPACEAPP_HOME: root },
+    platform: "linux",
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    stdin: dummyStdin(),
+    request: async () => ({ ok: true, status: 200 }),
+    execute: async (spec, io) => {
+      if (spec.command === "podman" && spec.args?.includes("info")) {
+        io?.stdout?.write(JSON.stringify({
+          version: { Version: "5.1.0" },
+          host: {
+            cgroupVersion: "v2",
+            cgroupControllers: ["cpu", "memory"]
+          }
+        }));
+      }
+      return 0;
+    }
+  });
+
+  assert.equal(code, 0);
+  const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+  assert.equal(bundle.engine.name, "podman");
+  assert.equal(bundle.engine.rootless, null);
+  assert.equal(bundle.engine.limitsDelegated, true);
+});
+
 test("ensurePodmanAvailable on macOS checks podman machine sizing and warns if insufficient", async () => {
   const stdout = captureStream();
   const stderr = captureStream();
