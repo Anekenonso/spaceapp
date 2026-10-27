@@ -226,7 +226,8 @@ export function createSyntheticBenchmarkGraph(targetNodes = 2000): MemoryGraphPa
 
   // Deterministically generate cross-edges to reach target edge count (3 edges per node, e.g. 150,000 edges for 50,000 nodes)
   const targetEdgeCount = nodeCount >= 50000 ? 150000 : Math.round(nodeCount * 3);
-  const seenPairs = new Set(edges.map((e) => `${e.source}|${e.target}`));
+  // Initial tree edges are the only potential collisions; cross-edges across distinct offsets never collide with each other
+  const initialPairs = new Set(edges.map((e) => `${e.source}|${e.target}`));
   let crossEdgeCount = 0;
   let offset = 1;
   while (edges.length < targetEdgeCount && offset < nodes.length) {
@@ -234,8 +235,7 @@ export function createSyntheticBenchmarkGraph(targetNodes = 2000): MemoryGraphPa
       const srcId = nodes[i]!.id;
       const tgtId = nodes[(i + offset) % nodes.length]!.id;
       const pairKey = `${srcId}|${tgtId}`;
-      if (!seenPairs.has(pairKey)) {
-        seenPairs.add(pairKey);
+      if (!initialPairs.has(pairKey)) {
         edges.push({
           id: `edge:cross-${crossEdgeCount++}`,
           source: srcId,
@@ -1625,12 +1625,29 @@ export class DemoStore {
         if ((isBenchmarkQuery || (isExplicitBenchmarkLimit && !query.nodeType && !query.q)) && !hasOtherFilters) {
           const limit = isBenchmarkQuery && !query.limit ? 50000 : (query.limit ?? 2000);
           const synth = createSyntheticBenchmarkGraph(limit);
+          const hasQueryFilter = Boolean(query.q && query.q.toLowerCase() !== "benchmark");
+          const hasTypeFilter = Boolean(query.nodeType);
+          if (!hasQueryFilter && !hasTypeFilter) {
+            return Promise.resolve({
+              data: {
+                ...synth,
+                filters: {
+                  ...synth.filters,
+                  q: query.q ?? null,
+                  nodeType: query.nodeType ?? null
+                },
+                totalMatchingNodes: synth.nodes.length,
+                totalMatchingEdges: synth.edges.length,
+                truncated: false
+              }
+            });
+          }
           let matchingNodes = synth.nodes;
-          if (query.q && query.q.toLowerCase() !== "benchmark") {
-            const qLower = query.q.toLowerCase();
+          if (hasQueryFilter) {
+            const qLower = query.q!.toLowerCase();
             matchingNodes = matchingNodes.filter(n => n.label.toLowerCase().includes(qLower));
           }
-          if (query.nodeType) {
+          if (hasTypeFilter) {
             matchingNodes = matchingNodes.filter(n => n.type === query.nodeType);
           }
           const matchingNodeIds = new Set(matchingNodes.map(n => n.id));
